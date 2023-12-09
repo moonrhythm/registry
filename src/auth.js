@@ -12,7 +12,6 @@ export async function authorized (request, env, ctx) {
 		return
 	}
 
-	const canPush = false
 	const resp = registryErrorResponse(401, UnauthorizedError)
 	resp.headers.set('www-authenticate', `basic realm=${request.url}`)
 
