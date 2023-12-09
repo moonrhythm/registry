@@ -1,0 +1,11 @@
+name = "registry"
+main = "src/index.js"
+compatibility_date = "2023-05-18"
+
+[route]
+pattern = "registry.moonrhythm.io"
+custom_domain = true
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "registry"
