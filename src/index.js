@@ -17,7 +17,7 @@ router.get('/',
 	}
 )
 
-router.get('/*',
+router.all('/*',
 	/**
 	 * @param {import('itty-router').IRequest} request
 	 * @param {Env} env
