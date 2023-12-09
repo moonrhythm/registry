@@ -40,6 +40,7 @@ router.get('/:name+/blobs/:digest+',
 		if (!res) {
 			return registryErrorResponse(404, BlobUnknownError)
 		}
+
 		const resp = new Response(res.body, {
 			headers: {
 				'docker-content-digest': hexToDigest(res.checksums.sha256),
@@ -89,18 +90,30 @@ router.get('/:name+/manifests/:reference',
 	async (request, env, ctx) => {
 		const { name, reference } = request.params
 
+		const cache = caches.default
+		{
+			const resp = await cache.match(request)
+			if (resp) {
+				return resp
+			}
+		}
+
 		const res = await env.BUCKET.get(`${name}/manifests/${reference}`)
 		if (!res) {
 			return registryErrorResponse(404, ManifestUnknownError)
 		}
 
-		return new Response(res.body, {
+		const resp = new Response(res.body, {
 			headers: {
 				'docker-content-digest': hexToDigest(res.checksums.sha256),
 				'content-length': res.size,
-				'content-type': res.httpMetadata.contentType
+				'content-type': res.httpMetadata.contentType,
+				'cache-control': 'public, max-age=300'
 			}
 		})
+		ctx.waitUntil(cache.put(request, resp.clone()))
+
+		return resp
 	}
 )
 
