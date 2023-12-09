@@ -45,7 +45,7 @@ router.get('/:name+/blobs/:digest+',
 			headers: {
 				'docker-content-digest': hexToDigest(res.checksums.sha256),
 				'content-length': res.size,
-				'cache-control': 'public, max-age=31536000'
+				'cache-control': 'public, max-age=31536000; immutable'
 			}
 		})
 		ctx.waitUntil(cache.put(request, resp.clone()))
@@ -108,7 +108,9 @@ router.get('/:name+/manifests/:reference',
 				'docker-content-digest': hexToDigest(res.checksums.sha256),
 				'content-length': res.size,
 				'content-type': res.httpMetadata.contentType,
-				'cache-control': 'public, max-age=300'
+				'cache-control': reference.startsWith('sha256:')
+					? 'public, max-age=31536000; immutable'
+					: 'public, max-age=600'
 			}
 		})
 		ctx.waitUntil(cache.put(request, resp.clone()))
