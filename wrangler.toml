@@ -6,6 +6,12 @@ compatibility_date = "2023-05-18"
 pattern = "registry.moonrhythm.io"
 custom_domain = true
 
+[vars]
+
 [[r2_buckets]]
 binding = "BUCKET"
 bucket_name = "registry"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "dbec4ec100f04a10a173baa1edc9a96d"

@@ -145,6 +145,69 @@ router.head('/:name+/manifests/:reference',
 	}
 )
 
+// end-4
+router.post('/:name+/blobs/uploads',
+	/**
+	 * @param {import('itty-router').IRequest} request
+	 * @param {Env} env
+	 * @param {import('@cloudflare/workers-types').ExecutionContext} ctx
+	 * @returns {Promise<import('@cloudflare/workers-types').Response>}
+	 */
+	async (request, env, ctx) => {
+		const { name } = request.params
+		const { digest } = request.query
+
+		// TODO: implement
+	}
+)
+
+// end-5
+router.patch('/:name+/blobs/:reference',
+	/**
+	 * @param {import('itty-router').IRequest} request
+	 * @param {Env} env
+	 * @param {import('@cloudflare/workers-types').ExecutionContext} ctx
+	 * @returns {Promise<import('@cloudflare/workers-types').Response>}
+	 */
+	async (request, env, ctx) => {
+		const { name } = request.params
+		const { digest } = request.query
+
+		// TODO: implement
+	}
+)
+
+// end-6
+router.put('/:name+/blobs/:reference',
+	/**
+	 * @param {import('itty-router').IRequest} request
+	 * @param {Env} env
+	 * @param {import('@cloudflare/workers-types').ExecutionContext} ctx
+	 * @returns {Promise<import('@cloudflare/workers-types').Response>}
+	 */
+	async (request, env, ctx) => {
+		const { name, reference } = request.params
+		const { digest } = request.query
+
+		// TODO: implement
+	}
+)
+
+// end-7
+router.put('/:name+/manifests/:reference',
+	/**
+	 * @param {import('itty-router').IRequest} request
+	 * @param {Env} env
+	 * @param {import('@cloudflare/workers-types').ExecutionContext} ctx
+	 * @returns {Promise<import('@cloudflare/workers-types').Response>}
+	 */
+	async (request, env, ctx) => {
+		const { name, reference } = request.params
+
+		// TODO: implement
+	}
+)
+
 // end-8
 router.get('/:name+/tags/list',
 	/**
@@ -187,6 +250,55 @@ router.get('/:name+/tags/list',
 	}
 )
 
+// end-9
+router.delete('/:name+/manifests/:reference',
+	/**
+	 * @param {import('itty-router').IRequest} request
+	 * @param {Env} env
+	 * @param {import('@cloudflare/workers-types').ExecutionContext} ctx
+	 * @returns {Promise<import('@cloudflare/workers-types').Response>}
+	 */
+	async (request, env, ctx) => {
+		const { name, reference } = request.params
+
+		const res = await env.BUCKET.head(`${name}/manifests/${reference}`)
+		if (!res) {
+			return registryErrorResponse(404, ManifestUnknownError)
+		}
+
+		// TODO: remove manifests sha256 that matches with ref ? or send 2 request to delete, tag and ref
+		// TODO: cronjob delete no ref blobs
+
+		await env.BUCKET.delete(`${name}/manifests/${reference}`)
+		return new Response(null, {
+			status: 202
+		})
+	}
+)
+
+// end-10
+router.delete('/:name+/blobs/:digest',
+	/**
+	 * @param {import('itty-router').IRequest} request
+	 * @param {Env} env
+	 * @param {import('@cloudflare/workers-types').ExecutionContext} ctx
+	 * @returns {Promise<import('@cloudflare/workers-types').Response>}
+	 */
+	async (request, env, ctx) => {
+		const { name, digest } = request.params
+
+		const res = await env.BUCKET.head(`${name}/blobs/${digest}`)
+		if (!res) {
+			return registryErrorResponse(404, BlobUnknownError)
+		}
+
+		await env.BUCKET.delete(`${name}/blobs/${digest}`)
+		return new Response(null, {
+			status: 202
+		})
+	}
+)
+
 function hexToDigest (s) {
 	const digest = [...new Uint8Array(s)]
 		.map((b) => b.toString(16).padStart(2, '0'))
@@ -205,7 +317,7 @@ function hexToDigest (s) {
 
 // code-1
 /** @type {RegistryError} */
-const BlobUnknownError = {
+export const BlobUnknownError = {
 	code: 'BLOB_UNKNOWN',
 	message: 'blob unknown to registry',
 	detail: 'blob unknown to registry'
@@ -213,10 +325,18 @@ const BlobUnknownError = {
 
 // code-7
 /** @type {RegistryError} */
-const ManifestUnknownError = {
+export const ManifestUnknownError = {
 	code: 'MANIFEST_UNKNOWN',
 	message: 'manifest unknown to registry',
 	detail: 'manifest unknown to registry'
+}
+
+// code-11
+/** @type {RegistryError} */
+export const UnauthorizedError = {
+	code: 'UNAUTHORIZED',
+	message: 'authentication required',
+	detail: 'authentication required'
 }
 
 /**
@@ -228,8 +348,9 @@ const ManifestUnknownError = {
  * Generates a registry error response.
  * @param {number} status - http status code
  * @param {...RegistryError} errors - The error(s) to include in the response.
+ * @returns {import('@cloudflare/workers-types').Response}
  */
-function registryErrorResponse (status, ...errors) {
+export function registryErrorResponse (status, ...errors) {
 	return new Response(JSON.stringify({
 		errors: errors
 	}), {
