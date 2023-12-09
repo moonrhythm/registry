@@ -167,10 +167,19 @@ router.get('/:name+/tags/list',
 		const tags = res.objects
 			.map((x) => x.key.split('/').pop())
 		const lastKey = tags.length > 0 ? tags[tags.length - 1] : ''
+
+		let link = ''
+		if (tags.length >= n) {
+			const qs = new URLSearchParams({ n: '' + limit, last: lastKey })
+			const url = new URL(request.url)
+			url.search = qs.toString()
+			link = url.toString()
+		}
+
 		return new Response(JSON.stringify({ name, tags }), {
 			headers: {
 				'content-type': 'application/json',
-				'link': `${request.url}?n=${limit}&last=${lastKey}; rel=next`
+				...link ? { 'link': `<${link}>; rel=next` } : null
 			}
 		})
 	}
