@@ -166,11 +166,52 @@ router.post('/:name+/blobs/uploads/',
 	 */
 	async (request, env, ctx) => {
 		const { name } = request.params
-		const { digest, mount, from } = request.query
+		const { digest, mount, from, origin } = request.query
 
 		// end-11
 		if (mount && from) {
-			// cross mount not supported pass to end-4a
+			const res = await env.BUCKET.head(`${name}/blobs/${mount}`)
+			if (res) { // already exists, skip upload
+				return new Response(null, {
+					status: 201,
+					headers: {
+						location: `/v2/${name}/blobs/${mount}`,
+						'docker-content-digest': mount
+					}
+				})
+			}
+
+			if (origin) { // cross-origin mount
+				const resp = await fetch(`https://${origin}/v2/${from}/blobs/${mount}`, {
+					redirect: 'follow'
+				})
+				if (resp.ok) { // not ok fallback to end-4a
+					await env.BUCKET.put(`${name}/blobs/${mount}`, resp.body, {
+						sha256: digestToSHA256(mount)
+					})
+					return new Response(null, {
+						status: 201,
+						headers: {
+							location: `/v2/${name}/blobs/${mount}`,
+							'docker-content-digest': mount
+						}
+					})
+				}
+			} else { // mount from same registry but other namespace
+				const res = await env.BUCKET.get(`${from}/blobs/${mount}`)
+				if (res) { // object not found, fallback to end-4a
+					await env.BUCKET.put(`${name}/blobs/${mount}`, res.body, {
+						sha256: digestToSHA256(mount)
+					})
+					return new Response(null, {
+						status: 201,
+						headers: {
+							location: `/v2/${name}/blobs/${mount}`,
+							'docker-content-digest': mount
+						}
+					})
+				}
+			}
 		}
 
 		// end-4b
