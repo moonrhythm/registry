@@ -230,7 +230,10 @@ router.patch('/:name+/blobs/uploads/:reference',
 		if (!length) {
 			return new registryErrorResponse(400, UnsupportedError) // body exceed cloudflare allow
 		}
-		const [ rangeStart, rangeEnd ] = request.headers.get('content-range')?.split('-') ?? []
+		const contentRange = request.headers.get('content-range')
+		const [ rangeStart, rangeEnd ] = contentRange
+			? contentRange.split('-')
+			: ['0', '' + length]
 		if (!rangeStart || !rangeEnd) {
 			return new registryErrorResponse(400, UnsupportedError)
 		}
