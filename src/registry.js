@@ -185,6 +185,7 @@ router.post('/:name+/blobs/uploads/',
 				status: 201,
 				headers: {
 					location: `/v2/${name}/blobs/${digest}`,
+					'docker-content-digest': digest
 				}
 			})
 		}
@@ -310,7 +311,8 @@ router.put('/:name+/blobs/uploads/:reference',
 		return new Response(null, {
 			status: 201,
 			headers: {
-				location: `/v2/${name}/blobs/${digest}`
+				location: `/v2/${name}/blobs/${digest}`,
+				'docker-content-digest': digest
 			}
 		})
 	}
@@ -332,12 +334,54 @@ router.put('/:name+/manifests/:reference',
 			return registryErrorResponse(400, UnsupportedError)
 		}
 
-		await env.BUCKET.put(`${name}/manifests/${reference}`, request.body)
+		const sha256 = new crypto.DigestStream('SHA-256')
+		const bodyStream = request.body.getReader()
+		const shaStream = sha256.getWriter()
+
+		/** @type {Blob} */
+		let blob
+		{
+			// read body to sha and blob
+			const bs = []
+			while (true) {
+				const v = await bodyStream.read()
+				if (v.done) {
+					break
+				}
+				bs.push(v.value)
+				await shaStream.write(v.value)
+			}
+			blob = new Blob(bs)
+		}
+
+		bodyStream.releaseLock()
+		shaStream.close()
+
+		const digest = hexToDigest(await sha256.digest)
+
+		await Promise.all([
+			env.BUCKET.put(`${name}/manifests/${digest}`, blob, {
+				sha256: digestToSHA256(digest),
+				httpMetadata: {
+					contentType
+				}
+			}),
+			digest !== reference
+				? env.BUCKET.put(`${name}/manifests/${reference}`, blob, {
+					sha256: digestToSHA256(digest),
+					httpMetadata: {
+						contentType
+					}
+				})
+				: null
+		])
+
 
 		return new Response(null, {
 			status: 201,
 			headers: {
-				location: `/v2/${name}/manifests/${reference}`
+				location: `/v2/${name}/manifests/${reference}`,
+				'docker-content-digest': digest
 			}
 		})
 	}
