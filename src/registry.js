@@ -109,7 +109,7 @@ router.get('/:name+/manifests/:reference',
 				'content-length': res.size,
 				'content-type': res.httpMetadata.contentType,
 				'cache-control': reference.startsWith('sha256:')
-					? 'public, max-age=31536000; immutable'
+					? 'public, max-age=86400'
 					: 'public, max-age=600'
 			}
 		})
