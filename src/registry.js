@@ -1,5 +1,7 @@
 import { Router } from 'itty-router'
 
+const ChunkMinLength = 5<<10*2 // 5 MiB
+
 export const router = Router({ base: '/v2/' })
 
 // https://github.com/opencontainers/distribution-spec/blob/main/spec.md
@@ -109,7 +111,7 @@ router.get('/:name+/manifests/:reference',
 				'content-length': res.size,
 				'content-type': res.httpMetadata.contentType,
 				'cache-control': reference.startsWith('sha256:')
-					? 'public, max-age=31536000; immutable'
+					? 'public, max-age=86400'
 					: 'public, max-age=600'
 			}
 		})
@@ -140,6 +142,246 @@ router.head('/:name+/manifests/:reference',
 				'docker-content-digest': hexToDigest(res.checksums.sha256),
 				'content-length': res.size,
 				'content-type': res.httpMetadata.contentType
+			}
+		})
+	}
+)
+
+/**
+ * @typedef UploadState
+ * @property {number} size
+ * @property {import('@cloudflare/workers-types').R2UploadedPart[]} parts
+ */
+
+// end-4,11
+// end-4a /v2/<name>/blobs/uploads/
+// end-4b /v2/<name>/blobs/uploads/?digest=<digest>
+// end-11 /v2/<name>/blobs/uploads/?mount=<digest>&from=<other_name>
+router.post('/:name+/blobs/uploads/',
+	/**
+	 * @param {import('itty-router').IRequest} request
+	 * @param {Env} env
+	 * @param {import('@cloudflare/workers-types').ExecutionContext} ctx
+	 * @returns {Promise<import('@cloudflare/workers-types').Response>}
+	 */
+	async (request, env, ctx) => {
+		const { name } = request.params
+		const { digest, mount, from } = request.query
+
+		// end-11
+		if (mount && from) {
+			// cross mount not supported pass to end-4a
+		}
+
+		// end-4b
+		if (digest) {
+			const res = await env.BUCKET.head(`${name}/blobs/${digest}`)
+			if (!res) { // not exists, then put to bucket
+				await env.BUCKET.put(`${name}/blobs/${digest}`, request.body, {
+					sha256: digestToSHA256(digest)
+				})
+			}
+			return new Response(null, {
+				status: 201,
+				headers: {
+					location: `/v2/${name}/blobs/${digest}`,
+					'docker-content-digest': digest
+				}
+			})
+		}
+
+		// end-4a
+		// step: end-4a => [end-5]* => end-6
+
+		const reference = crypto.randomUUID()
+		const upload = await env.BUCKET.createMultipartUpload(`uploads/${reference}`)
+		/** @type {UploadState} */
+		const uploadState = {
+			size: 0,
+			parts: []
+		}
+
+		return new Response(null, {
+			status: 202,
+			headers: {
+				location: uploadLocation(name, reference, upload.uploadId, uploadState),
+				'oci-chunk-min-length': ChunkMinLength
+			}
+		})
+	}
+)
+
+// end-5
+// /v2/<name>/blobs/uploads/<reference>?upload=<uploadId>&state=<state>
+router.patch('/:name+/blobs/uploads/:reference',
+	/**
+	 * @param {import('itty-router').IRequest} request
+	 * @param {Env} env
+	 * @param {import('@cloudflare/workers-types').ExecutionContext} ctx
+	 * @returns {Promise<import('@cloudflare/workers-types').Response>}
+	 */
+	async (request, env, ctx) => {
+		const { name, reference } = request.params
+		const { upload: uploadId, state, digest } = request.query
+		if (typeof uploadId !== 'string' || typeof state !== 'string') {
+			return new registryErrorResponse(400, UnsupportedError)
+		}
+		const length = parseInt(request.headers.get('content-length') ?? '0')
+		if (!length) {
+			return new registryErrorResponse(400, UnsupportedError) // body exceed cloudflare allow
+		}
+		const [ rangeStart, rangeEnd ] = request.headers.get('content-range')?.split('-') ?? []
+		if (!rangeStart || !rangeEnd) {
+			return new registryErrorResponse(400, UnsupportedError)
+		}
+
+		/** @type {UploadState} */
+		const uploadState = JSON.parse(state)
+		if (!uploadState) {
+			return new registryErrorResponse(400, UnsupportedError)
+		}
+
+		if (uploadState.size !== +rangeStart) {
+			return new Response(null, {
+				status: 416
+			})
+		}
+		if (uploadState.parts.length >= 10000) { // r2 limitation
+			return new Response(null, {
+				status: 500
+			})
+		}
+
+		const upload = env.BUCKET.resumeMultipartUpload(`uploads/${reference}`, uploadId)
+		const part = await upload.uploadPart(uploadState.parts.length + 1, request.body)
+		uploadState.parts.push(part)
+		uploadState.size += length
+
+		return new Response(null, {
+			status: 202,
+			headers: {
+				location: uploadLocation(name, reference, uploadId, uploadState),
+			}
+		})
+	}
+)
+
+// end-6
+// /v2/<name>/blobs/uploads/<reference>?upload=<uploadId>&state=<state>&digest=<digest>
+router.put('/:name+/blobs/uploads/:reference',
+	/**
+	 * @param {import('itty-router').IRequest} request
+	 * @param {Env} env
+	 * @param {import('@cloudflare/workers-types').ExecutionContext} ctx
+	 * @returns {Promise<import('@cloudflare/workers-types').Response>}
+	 */
+	async (request, env, ctx) => {
+		const { name, reference } = request.params
+		const { upload: uploadId, state, digest } = request.query
+		if (typeof uploadId !== 'string'
+			|| typeof state !== 'string'
+			|| typeof digest !== 'string') {
+			return new registryErrorResponse(400, UnsupportedError)
+		}
+
+		/** @type {UploadState} */
+		const uploadState = JSON.parse(state)
+		if (!uploadState) {
+			return new registryErrorResponse(400, UnsupportedError)
+		}
+
+		const upload = env.BUCKET.resumeMultipartUpload(`uploads/${reference}`, uploadId)
+
+		const length = parseInt(request.headers.get('content-length') ?? '0')
+		if (length > 0) {
+			const part = await upload.uploadPart(uploadState.parts.length + 1, request.body)
+			uploadState.parts.push(part)
+		}
+		await upload.complete(uploadState.parts)
+
+		// copy completed object to blob
+		{
+			const upload = await env.BUCKET.get(`uploads/${reference}`)
+			await env.BUCKET.put(`${name}/blobs/${digest}`, upload.body, {
+				sha256: digestToSHA256(digest)
+			})
+			await env.BUCKET.delete(`uploads/${reference}`)
+		}
+
+		return new Response(null, {
+			status: 201,
+			headers: {
+				location: `/v2/${name}/blobs/${digest}`,
+				'docker-content-digest': digest
+			}
+		})
+	}
+)
+
+// end-7
+router.put('/:name+/manifests/:reference',
+	/**
+	 * @param {import('itty-router').IRequest} request
+	 * @param {Env} env
+	 * @param {import('@cloudflare/workers-types').ExecutionContext} ctx
+	 * @returns {Promise<import('@cloudflare/workers-types').Response>}
+	 */
+	async (request, env, ctx) => {
+		const { name, reference } = request.params
+
+		const contentType = request.headers.get('content-type')
+		if (!contentType) {
+			return registryErrorResponse(400, UnsupportedError)
+		}
+
+		const sha256 = new crypto.DigestStream('SHA-256')
+		const bodyStream = request.body.getReader()
+		const shaStream = sha256.getWriter()
+
+		/** @type {Blob} */
+		let blob
+		{
+			// read body to sha and blob
+			const bs = []
+			while (true) {
+				const v = await bodyStream.read()
+				if (v.done) {
+					break
+				}
+				bs.push(v.value)
+				await shaStream.write(v.value)
+			}
+			blob = new Blob(bs)
+		}
+
+		bodyStream.releaseLock()
+		shaStream.close()
+
+		const digest = hexToDigest(await sha256.digest)
+
+		await Promise.all([
+			env.BUCKET.put(`${name}/manifests/${digest}`, blob, {
+				sha256: digestToSHA256(digest),
+				httpMetadata: {
+					contentType
+				}
+			}),
+			digest !== reference
+				? env.BUCKET.put(`${name}/manifests/${reference}`, blob, {
+					sha256: digestToSHA256(digest),
+					httpMetadata: {
+						contentType
+					}
+				})
+				: null
+		])
+
+
+		return new Response(null, {
+			status: 201,
+			headers: {
+				location: `/v2/${name}/manifests/${reference}`,
+				'docker-content-digest': digest
 			}
 		})
 	}
@@ -187,6 +429,87 @@ router.get('/:name+/tags/list',
 	}
 )
 
+// end-9
+router.delete('/:name+/manifests/:reference',
+	/**
+	 * @param {import('itty-router').IRequest} request
+	 * @param {Env} env
+	 * @param {import('@cloudflare/workers-types').ExecutionContext} ctx
+	 * @returns {Promise<import('@cloudflare/workers-types').Response>}
+	 */
+	async (request, env, ctx) => {
+		const { name, reference } = request.params
+
+		const res = await env.BUCKET.head(`${name}/manifests/${reference}`)
+		if (!res) {
+			return registryErrorResponse(404, ManifestUnknownError)
+		}
+
+		// TODO: remove manifests sha256 that matches with ref ? or send 2 request to delete, tag and ref
+		// TODO: cronjob delete no ref blobs
+
+		await env.BUCKET.delete(`${name}/manifests/${reference}`)
+		return new Response(null, {
+			status: 202
+		})
+	}
+)
+
+// end-10
+router.delete('/:name+/blobs/:digest',
+	/**
+	 * @param {import('itty-router').IRequest} request
+	 * @param {Env} env
+	 * @param {import('@cloudflare/workers-types').ExecutionContext} ctx
+	 * @returns {Promise<import('@cloudflare/workers-types').Response>}
+	 */
+	async (request, env, ctx) => {
+		const { name, digest } = request.params
+
+		const res = await env.BUCKET.head(`${name}/blobs/${digest}`)
+		if (!res) {
+			return registryErrorResponse(404, BlobUnknownError)
+		}
+
+		await env.BUCKET.delete(`${name}/blobs/${digest}`)
+		return new Response(null, {
+			status: 202
+		})
+	}
+)
+
+// end-13
+// /v2/<name>/blobs/uploads/<reference>?upload=<uploadId>&state=<state>
+router.get('/:name+/blobs/uploads/:reference',
+	/**
+	 * @param {import('itty-router').IRequest} request
+	 * @param {Env} env
+	 * @param {import('@cloudflare/workers-types').ExecutionContext} ctx
+	 * @returns {Promise<import('@cloudflare/workers-types').Response>}
+	 */
+	async (request, env, ctx) => {
+		const { name, reference } = request.params
+		const { upload: uploadId, state, digest } = request.query
+		if (typeof uploadId !== 'string' || typeof state !== 'string') {
+			return new registryErrorResponse(400, UnsupportedError)
+		}
+
+		/** @type {UploadState} */
+		const uploadState = JSON.parse(state)
+		if (!uploadState) {
+			return new registryErrorResponse(400, UnsupportedError)
+		}
+
+		return new Response(null, {
+			status: 204,
+			headers: {
+				location: uploadLocation(name, reference, uploadId, uploadState),
+				range: `0-${uploadState.size}`
+			}
+		})
+	}
+)
+
 function hexToDigest (s) {
 	const digest = [...new Uint8Array(s)]
 		.map((b) => b.toString(16).padStart(2, '0'))
@@ -205,18 +528,42 @@ function hexToDigest (s) {
 
 // code-1
 /** @type {RegistryError} */
-const BlobUnknownError = {
+export const BlobUnknownError = {
 	code: 'BLOB_UNKNOWN',
 	message: 'blob unknown to registry',
 	detail: 'blob unknown to registry'
 }
 
+// code-3
+/** @type {RegistryError} */
+export const BlobUploadUnknownError = {
+	code: 'BLOB_UPLOAD_UNKNOWN',
+	message: 'blob upload unknown to registry',
+	detail: 'blob upload unknown to registry'
+}
+
 // code-7
 /** @type {RegistryError} */
-const ManifestUnknownError = {
+export const ManifestUnknownError = {
 	code: 'MANIFEST_UNKNOWN',
 	message: 'manifest unknown to registry',
 	detail: 'manifest unknown to registry'
+}
+
+// code-11
+/** @type {RegistryError} */
+export const UnauthorizedError = {
+	code: 'UNAUTHORIZED',
+	message: 'authentication required',
+	detail: 'authentication required'
+}
+
+// code-13
+/** @type {RegistryError} */
+export const UnsupportedError = {
+	code: 'UNSUPPORTED',
+	message: 'the operation is unsupported',
+	detail: 'the operation is unsupported'
 }
 
 /**
@@ -228,8 +575,9 @@ const ManifestUnknownError = {
  * Generates a registry error response.
  * @param {number} status - http status code
  * @param {...RegistryError} errors - The error(s) to include in the response.
+ * @returns {import('@cloudflare/workers-types').Response}
  */
-function registryErrorResponse (status, ...errors) {
+export function registryErrorResponse (status, ...errors) {
 	return new Response(JSON.stringify({
 		errors: errors
 	}), {
@@ -238,4 +586,27 @@ function registryErrorResponse (status, ...errors) {
 			'content-type': 'application/json'
 		}
 	})
+}
+
+const sha256PrefixLength = 'sha256:'.length
+
+/**
+ *
+ * @param {string} digest
+ * @returns {string}
+ */
+function digestToSHA256 (digest) {
+	return digest.slice(sha256PrefixLength)
+}
+
+/**
+ * @param {string} name
+ * @param {string} reference
+ * @param {string} uploadId
+ * @param {UploadState} uploadState
+ * @returns {string}
+ */
+function uploadLocation (name, reference, uploadId, uploadState) {
+	const state = encodeURIComponent(JSON.stringify(uploadState))
+	return `/v2/${name}/blobs/uploads/${reference}?upload=${uploadId}&state=${state}`
 }

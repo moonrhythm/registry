@@ -1,9 +1,10 @@
 import { Router } from 'itty-router'
 import { router as registry } from './registry'
+import { authorized } from './auth'
 
 const router = Router()
 
-router.all('/v2/*', registry.handle)
+router.all('/v2/*', authorized, registry.handle)
 
 router.get('/',
 	/**
@@ -17,7 +18,7 @@ router.get('/',
 	}
 )
 
-router.all('/*',
+router.all('*',
 	/**
 	 * @param {import('itty-router').IRequest} request
 	 * @param {Env} env
@@ -34,6 +35,8 @@ router.all('/*',
 /**
  * @typedef Env
  * @property {import('@cloudflare/workers-types').R2Bucket} BUCKET
+ * @property {string} AUTH_USER
+ * @property {string} AUTH_PASSWORD
  */
 
 export default {
