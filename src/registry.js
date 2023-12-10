@@ -170,7 +170,7 @@ router.post('/:name+/blobs/uploads/',
 
 		// end-11
 		if (mount && from) {
-			// not supported pass through end-4a
+			// cross mount not supported pass to end-4a
 		}
 
 		// end-4b
@@ -190,10 +190,10 @@ router.post('/:name+/blobs/uploads/',
 		}
 
 		// end-4a
-		// POST => PATCH => PUT
+		// step: end-4a => [end-5]* => end-6
 
-		const sessionId = crypto.randomUUID()
-		const upload = await env.BUCKET.createMultipartUpload(`uploads/${sessionId}`)
+		const reference = crypto.randomUUID()
+		const upload = await env.BUCKET.createMultipartUpload(`uploads/${reference}`)
 		/** @type {UploadState} */
 		const uploadState = {
 			size: 0,
@@ -203,16 +203,16 @@ router.post('/:name+/blobs/uploads/',
 		return new Response(null, {
 			status: 202,
 			headers: {
-				location: uploadLocation(name, sessionId, upload.uploadId, uploadState),
+				location: uploadLocation(name, reference, upload.uploadId, uploadState),
 				'oci-chunk-min-length': ChunkMinLength
 			}
 		})
 	}
 )
 
-// end-4a patch
-// /:name+/blobs/_upload?session=<sessionId>&upload=<uploadId>&state=<state>
-router.patch('/:name+/blobs/_upload',
+// end-5
+// /v2/<name>/blobs/uploads/<reference>?upload=<uploadId>&state=<state>
+router.patch('/:name+/blobs/uploads/:reference',
 	/**
 	 * @param {import('itty-router').IRequest} request
 	 * @param {Env} env
@@ -220,11 +220,9 @@ router.patch('/:name+/blobs/_upload',
 	 * @returns {Promise<import('@cloudflare/workers-types').Response>}
 	 */
 	async (request, env, ctx) => {
-		const { name } = request.params
-		const { session: sessionId, upload: uploadId, state } = request.query
-		if (typeof sessionId !== 'string'
-			|| typeof uploadId !== 'string'
-			|| typeof state !== 'string') {
+		const { name, reference } = request.params
+		const { upload: uploadId, state, digest } = request.query
+		if (typeof uploadId !== 'string' || typeof state !== 'string') {
 			return new registryErrorResponse(400, UnsupportedError)
 		}
 		const length = parseInt(request.headers.get('content-length') ?? '0')
@@ -253,7 +251,7 @@ router.patch('/:name+/blobs/_upload',
 			})
 		}
 
-		const upload = env.BUCKET.resumeMultipartUpload(`uploads/${sessionId}`, uploadId)
+		const upload = env.BUCKET.resumeMultipartUpload(`uploads/${reference}`, uploadId)
 		const part = await upload.uploadPart(uploadState.parts.length + 1, request.body)
 		uploadState.parts.push(part)
 		uploadState.size += length
@@ -261,15 +259,15 @@ router.patch('/:name+/blobs/_upload',
 		return new Response(null, {
 			status: 202,
 			headers: {
-				location: uploadLocation(name, sessionId, uploadId, uploadState),
+				location: uploadLocation(name, reference, uploadId, uploadState),
 			}
 		})
 	}
 )
 
-// end-4a put
-// /:name+/blobs/_upload?session=<sessionId>&upload=<uploadId>&state=<state>&digest=<digest>
-router.put('/:name+/blobs/_upload',
+// end-6
+// /v2/<name>/blobs/uploads/<reference>?upload=<uploadId>&state=<state>&digest=<digest>
+router.put('/:name+/blobs/uploads/:reference',
 	/**
 	 * @param {import('itty-router').IRequest} request
 	 * @param {Env} env
@@ -277,10 +275,9 @@ router.put('/:name+/blobs/_upload',
 	 * @returns {Promise<import('@cloudflare/workers-types').Response>}
 	 */
 	async (request, env, ctx) => {
-		const { name } = request.params
-		const { session: sessionId, upload: uploadId, state, digest } = request.query
-		if (typeof sessionId !== 'string'
-			|| typeof uploadId !== 'string'
+		const { name, reference } = request.params
+		const { upload: uploadId, state, digest } = request.query
+		if (typeof uploadId !== 'string'
 			|| typeof state !== 'string'
 			|| typeof digest !== 'string') {
 			return new registryErrorResponse(400, UnsupportedError)
@@ -292,7 +289,7 @@ router.put('/:name+/blobs/_upload',
 			return new registryErrorResponse(400, UnsupportedError)
 		}
 
-		const upload = env.BUCKET.resumeMultipartUpload(`uploads/${sessionId}`, uploadId)
+		const upload = env.BUCKET.resumeMultipartUpload(`uploads/${reference}`, uploadId)
 
 		const length = parseInt(request.headers.get('content-length') ?? '0')
 		if (length > 0) {
@@ -303,11 +300,11 @@ router.put('/:name+/blobs/_upload',
 
 		// copy completed object to blob
 		{
-			const upload = await env.BUCKET.get(`uploads/${sessionId}`)
+			const upload = await env.BUCKET.get(`uploads/${reference}`)
 			await env.BUCKET.put(`${name}/blobs/${digest}`, upload.body, {
 				sha256: digestToSHA256(digest)
 			})
-			await env.BUCKET.delete(`uploads/${sessionId}`)
+			await env.BUCKET.delete(`uploads/${reference}`)
 		}
 
 		return new Response(null, {
@@ -316,72 +313,6 @@ router.put('/:name+/blobs/_upload',
 				location: `/v2/${name}/blobs/${digest}`
 			}
 		})
-	}
-)
-
-// end-4a get - get current upload range
-// /:name+/blobs/_upload?session=<sessionId>&upload=<uploadId>&state=<state>
-router.get('/:name+/blobs/_upload',
-	/**
-	 * @param {import('itty-router').IRequest} request
-	 * @param {Env} env
-	 * @param {import('@cloudflare/workers-types').ExecutionContext} ctx
-	 * @returns {Promise<import('@cloudflare/workers-types').Response>}
-	 */
-	async (request, env, ctx) => {
-		const { name } = request.params
-		const { session: sessionId, upload: uploadId, state, digest } = request.query
-		if (typeof sessionId !== 'string'
-			|| typeof uploadId !== 'string'
-			|| typeof state !== 'string') {
-			return new registryErrorResponse(400, UnsupportedError)
-		}
-
-		/** @type {UploadState} */
-		const uploadState = JSON.parse(state)
-		if (!uploadState) {
-			return new registryErrorResponse(400, UnsupportedError)
-		}
-
-		return new Response(null, {
-			status: 204,
-			headers: {
-				location: uploadLocation(name, sessionId, uploadId, uploadState),
-				range: `0-${uploadState.size}`
-			}
-		})
-	}
-)
-
-// end-5
-router.patch('/:name+/blobs/:reference',
-	/**
-	 * @param {import('itty-router').IRequest} request
-	 * @param {Env} env
-	 * @param {import('@cloudflare/workers-types').ExecutionContext} ctx
-	 * @returns {Promise<import('@cloudflare/workers-types').Response>}
-	 */
-	async (request, env, ctx) => {
-		const { name, reference } = request.params
-		const { digest } = request.query
-
-		// TODO: implement
-	}
-)
-
-// end-6
-router.put('/:name+/blobs/:reference',
-	/**
-	 * @param {import('itty-router').IRequest} request
-	 * @param {Env} env
-	 * @param {import('@cloudflare/workers-types').ExecutionContext} ctx
-	 * @returns {Promise<import('@cloudflare/workers-types').Response>}
-	 */
-	async (request, env, ctx) => {
-		const { name, reference } = request.params
-		const { digest } = request.query
-
-		// TODO: implement
 	}
 )
 
@@ -396,7 +327,19 @@ router.put('/:name+/manifests/:reference',
 	async (request, env, ctx) => {
 		const { name, reference } = request.params
 
-		// TODO: implement
+		const contentType = request.headers.get('content-type')
+		if (!contentType) {
+			return registryErrorResponse(400, UnsupportedError)
+		}
+
+		await env.BUCKET.put(`${name}/manifests/${reference}`, request.body)
+
+		return new Response(null, {
+			status: 201,
+			headers: {
+				location: `/v2/${name}/manifests/${reference}`
+			}
+		})
 	}
 )
 
@@ -487,6 +430,38 @@ router.delete('/:name+/blobs/:digest',
 		await env.BUCKET.delete(`${name}/blobs/${digest}`)
 		return new Response(null, {
 			status: 202
+		})
+	}
+)
+
+// end-13
+// /v2/<name>/blobs/uploads/<reference>?upload=<uploadId>&state=<state>
+router.get('/:name+/blobs/uploads/:reference',
+	/**
+	 * @param {import('itty-router').IRequest} request
+	 * @param {Env} env
+	 * @param {import('@cloudflare/workers-types').ExecutionContext} ctx
+	 * @returns {Promise<import('@cloudflare/workers-types').Response>}
+	 */
+	async (request, env, ctx) => {
+		const { name, reference } = request.params
+		const { upload: uploadId, state, digest } = request.query
+		if (typeof uploadId !== 'string' || typeof state !== 'string') {
+			return new registryErrorResponse(400, UnsupportedError)
+		}
+
+		/** @type {UploadState} */
+		const uploadState = JSON.parse(state)
+		if (!uploadState) {
+			return new registryErrorResponse(400, UnsupportedError)
+		}
+
+		return new Response(null, {
+			status: 204,
+			headers: {
+				location: uploadLocation(name, reference, uploadId, uploadState),
+				range: `0-${uploadState.size}`
+			}
 		})
 	}
 )
@@ -582,12 +557,12 @@ function digestToSHA256 (digest) {
 
 /**
  * @param {string} name
- * @param {string} sessionId
+ * @param {string} reference
  * @param {string} uploadId
  * @param {UploadState} uploadState
  * @returns {string}
  */
-function uploadLocation (name, sessionId, uploadId, uploadState) {
+function uploadLocation (name, reference, uploadId, uploadState) {
 	const state = encodeURIComponent(JSON.stringify(uploadState))
-	return `/v2/${name}/blobs/_upload/?session${sessionId}&upload=${uploadId}&state=${state}`
+	return `/v2/${name}/blobs/uploads/${reference}?upload=${uploadId}&state=${state}`
 }
