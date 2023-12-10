@@ -220,6 +220,7 @@ router.patch('/:name+/blobs/_upload',
 	 * @returns {Promise<import('@cloudflare/workers-types').Response>}
 	 */
 	async (request, env, ctx) => {
+		const { name } = request.params
 		const { session: sessionId, upload: uploadId, state } = request.query
 		if (typeof sessionId !== 'string'
 			|| typeof uploadId !== 'string'
@@ -276,6 +277,7 @@ router.put('/:name+/blobs/_upload',
 	 * @returns {Promise<import('@cloudflare/workers-types').Response>}
 	 */
 	async (request, env, ctx) => {
+		const { name } = request.params
 		const { session: sessionId, upload: uploadId, state, digest } = request.query
 		if (typeof sessionId !== 'string'
 			|| typeof uploadId !== 'string'
@@ -318,7 +320,7 @@ router.put('/:name+/blobs/_upload',
 )
 
 // end-4a get - get current upload range
-// /:name+/blobs/_upload?session=<sessionId>&upload=<uploadId>
+// /:name+/blobs/_upload?session=<sessionId>&upload=<uploadId>&state=<state>
 router.get('/:name+/blobs/_upload',
 	/**
 	 * @param {import('itty-router').IRequest} request
@@ -327,7 +329,27 @@ router.get('/:name+/blobs/_upload',
 	 * @returns {Promise<import('@cloudflare/workers-types').Response>}
 	 */
 	async (request, env, ctx) => {
-		// TODO: store in d1 ?
+		const { name } = request.params
+		const { session: sessionId, upload: uploadId, state, digest } = request.query
+		if (typeof sessionId !== 'string'
+			|| typeof uploadId !== 'string'
+			|| typeof state !== 'string') {
+			return new registryErrorResponse(400, UnsupportedError)
+		}
+
+		/** @type {UploadState} */
+		const uploadState = JSON.parse(state)
+		if (!uploadState) {
+			return new registryErrorResponse(400, UnsupportedError)
+		}
+
+		return new Response(null, {
+			status: 204,
+			headers: {
+				location: uploadLocation(name, sessionId, uploadId, uploadState),
+				range: `0-${uploadState.size}`
+			}
+		})
 	}
 )
 
@@ -340,7 +362,7 @@ router.patch('/:name+/blobs/:reference',
 	 * @returns {Promise<import('@cloudflare/workers-types').Response>}
 	 */
 	async (request, env, ctx) => {
-		const { name } = request.params
+		const { name, reference } = request.params
 		const { digest } = request.query
 
 		// TODO: implement
