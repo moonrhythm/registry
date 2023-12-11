@@ -70,11 +70,17 @@ router.post('/get',
 				from tags
 				where repository = ?
 				order by created_at desc
+			`).bind(repository),
+			db.prepare(`
+				select sum(size) as size
+				from blobs
+				where repository = ?
 			`).bind(repository)
 		])
 
 		return ok({
 			name: repo.name,
+			size: xs[2].results[0].size,
 			createdAt: format(dayjs(repo.created_at)),
 			digests: xs[0].results.map((x) => ({
 				digest: x.digest,
