@@ -12,7 +12,7 @@ router.all('*', (request) => {
 	}
 })
 
-router.post('/getRepositories',
+router.post('/list',
 	/**
 	 * @param {import('itty-router').IRequest} request
 	 * @param {Env} env
@@ -36,7 +36,7 @@ router.post('/getRepositories',
 	}
 )
 
-router.post('/getRepository',
+router.post('/get',
 	/**
 	 * @param {import('itty-router').IRequest} request
 	 * @param {Env} env
@@ -44,14 +44,8 @@ router.post('/getRepository',
 	 * @returns {Promise<import('@cloudflare/workers-types').Response>}
 	 */
 	async (request, env, ctx) => {
-		/**
-		 * @property {string} repository
-		 */
-		const req = await request.json()
-		if (!req) {
-			return error('invalid request')
-		}
-		if (typeof req.repository !== 'string') {
+		const { repository } = await request.json() ?? {}
+		if (typeof repository !== 'string') {
 			return error('repository required')
 		}
 
@@ -60,7 +54,7 @@ router.post('/getRepository',
 			select name, created_at
 			from repositories
 			where name = ?
-		`).bind(req.repository).first()
+		`).bind(repository).first()
 		if (!repo) {
 			return error('repository not found')
 		}
@@ -70,13 +64,13 @@ router.post('/getRepository',
 				from manifests
 				where repository = ?
 				order by created_at desc
-			`).bind(req.repository),
+			`).bind(repository),
 			db.prepare(`
 				select tag, digest, created_at
 				from tags
 				where repository = ?
 				order by created_at desc
-			`).bind(req.repository)
+			`).bind(repository)
 		])
 
 		return ok({
