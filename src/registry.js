@@ -425,29 +425,24 @@ router.put('/:name+/manifests/:reference',
 			db.prepare(`
 				insert into repositories (name)
 				values (?)
-				on conflict (name) do nothing
+				on conflict do nothing
 			`).bind(name),
 			db.prepare(`
 				insert into manifests (repository, digest)
 				values (?, ?)
-				on conflict (repository, digest)
-				do nothing
+				on conflict do nothing
 			`).bind(name, digest)
 		]
 		if (digest !== reference) {
 			batch.push(
 				db.prepare(`
-					update manifests
-					set tag = null,
-					    updated_at = current_timestamp
-					where repository = ? and tag = ?
-				`).bind(name, reference),
-				db.prepare(`
-					update manifests
-					set tag = ?,
-					    updated_at = current_timestamp
-					where repository = ? and digest = ?
-				`).bind(reference, name, digest)
+					insert into tags (repository, tag, digest)
+					values (?, ?, ?)
+					on conflict (repository, tag)
+					do update
+					    set digest = excluded.digest,
+					        created_at = current_timestamp
+				`).bind(name, reference, digest)
 			)
 		}
 		ctx.waitUntil(db.batch(batch))
@@ -532,7 +527,7 @@ router.delete('/:name+/manifests/:reference',
 			`).bind(name, reference).run())
 		} else {
 			ctx.waitUntil(env.DB.prepare(`
-				delete from manifests
+				delete from tags
 				where repository = ? and tag = ?
 			`).bind(name, reference).run())
 		}

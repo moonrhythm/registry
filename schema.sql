@@ -7,11 +7,18 @@ create table repositories (
 create table manifests (
 	repository text    not null,
 	digest     text    not null,
-	tag        text,
 	created_at integer not null default current_timestamp,
 	updated_at integer not null default current_timestamp,
 	primary key (repository, digest),
 	foreign key (repository) references repositories (name)
 );
-create index manifests_repository_tag_idx on manifests (repository, tag);
-create unique index manifests_repository_tag_key on manifests (repository, tag);
+
+create table tags (
+	repository text    not null,
+	tag        text    not null,
+	digest     text    not null,
+	created_at integer not null default current_timestamp,
+	primary key (repository, tag),
+	foreign key (repository) references repositories (name),
+	foreign key (repository, digest) references manifests (repository, digest)
+);
