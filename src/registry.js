@@ -420,6 +420,37 @@ router.put('/:name+/manifests/:reference',
 				: null
 		])
 
+		const db = env.DB
+		const batch = [
+			db.prepare(`
+				insert into repositories (name)
+				values (?)
+				on conflict (name) do nothing
+			`).bind(name),
+			db.prepare(`
+				insert into manifests (repository, digest)
+				values (?, ?)
+				on conflict (repository, digest)
+				do nothing
+			`).bind(name, digest)
+		]
+		if (digest !== reference) {
+			batch.push(
+				db.prepare(`
+					update manifests
+					set tag = null,
+					    updated_at = current_timestamp
+					where repository = ? and tag = ?
+				`).bind(name, reference),
+				db.prepare(`
+					update manifests
+					set tag = ?,
+					    updated_at = current_timestamp
+					where repository = ? and digest = ?
+				`).bind(reference, name, digest)
+			)
+		}
+		ctx.waitUntil(db.batch(batch))
 
 		return new Response(null, {
 			status: 201,
@@ -493,6 +524,19 @@ router.delete('/:name+/manifests/:reference',
 		// TODO: cronjob delete no ref blobs
 
 		await env.BUCKET.delete(`${name}/manifests/${reference}`)
+
+		if (isSHA256(reference)) {
+			ctx.waitUntil(env.DB.prepare(`
+				delete from manifests
+				where repository = ? and digest = ?
+			`).bind(name, reference).run())
+		} else {
+			ctx.waitUntil(env.DB.prepare(`
+				delete from manifests
+				where repository = ? and tag = ?
+			`).bind(name, reference).run())
+		}
+
 		return new Response(null, {
 			status: 202
 		})
@@ -641,6 +685,14 @@ const sha256PrefixLength = 'sha256:'.length
  */
 function digestToSHA256 (digest) {
 	return digest.slice(sha256PrefixLength)
+}
+
+/**
+ * @param {string} digest
+ * @returns {boolean}
+ */
+function isSHA256 (digest) {
+	return digest.startsWith('sha256:')
 }
 
 /**

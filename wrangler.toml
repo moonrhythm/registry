@@ -11,3 +11,7 @@ custom_domain = true
 [[r2_buckets]]
 binding = "BUCKET"
 bucket_name = "registry"
+
+[[d1_databases]]
+binding = "DB"
+database_id = "e1233b26-0da3-4c43-a60d-09d6f7c7ee0c"
