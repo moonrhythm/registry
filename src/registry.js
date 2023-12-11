@@ -235,7 +235,7 @@ router.post('/:name+/blobs/uploads/',
 		// step: end-4a => [end-5]* => end-6
 
 		const reference = crypto.randomUUID()
-		const upload = await env.BUCKET.createMultipartUpload(`uploads/${reference}`)
+		const upload = await env.BUCKET.createMultipartUpload(`_uploads/${reference}`)
 		/** @type {UploadState} */
 		const uploadState = {
 			size: 0,
@@ -296,7 +296,7 @@ router.patch('/:name+/blobs/uploads/:reference',
 			})
 		}
 
-		const upload = env.BUCKET.resumeMultipartUpload(`uploads/${reference}`, uploadId)
+		const upload = env.BUCKET.resumeMultipartUpload(`_uploads/${reference}`, uploadId)
 		const part = await upload.uploadPart(uploadState.parts.length + 1, request.body)
 		uploadState.parts.push(part)
 		uploadState.size += length
@@ -334,7 +334,7 @@ router.put('/:name+/blobs/uploads/:reference',
 			return registryErrorResponse(400, UnsupportedError)
 		}
 
-		const upload = env.BUCKET.resumeMultipartUpload(`uploads/${reference}`, uploadId)
+		const upload = env.BUCKET.resumeMultipartUpload(`_uploads/${reference}`, uploadId)
 
 		const length = parseInt(request.headers.get('content-length') ?? '0')
 		if (length > 0) {
@@ -345,11 +345,11 @@ router.put('/:name+/blobs/uploads/:reference',
 
 		// copy completed object to blob
 		{
-			const upload = await env.BUCKET.get(`uploads/${reference}`)
+			const upload = await env.BUCKET.get(`_uploads/${reference}`)
 			await env.BUCKET.put(`${name}/blobs/${digest}`, upload.body, {
 				sha256: digestToSHA256(digest)
 			})
-			await env.BUCKET.delete(`uploads/${reference}`)
+			await env.BUCKET.delete(`_uploads/${reference}`)
 		}
 
 		return new Response(null, {
