@@ -28,6 +28,5 @@ create table blobs (
 	digest     text    not null,
 	size       integer not null,
 	created_at integer not null default current_timestamp,
-	primary key (repository, digest),
-	foreign key (repository) references repositories (name)
+	primary key (repository, digest)
 );

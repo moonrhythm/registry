@@ -716,7 +716,7 @@ function uploadLocation (name, reference, uploadId, uploadState) {
  * @param {import('@cloudflare/workers-types').D1Database} db
  * @param {string} name
  * @param {string} digest
- * @param {string} size
+ * @param {number} size
  * @returns {Promise<import('@cloudflare/workers-types').D1Result>}
  */
 function insertBlob (db, name, digest, size) {
