@@ -15,3 +15,7 @@ bucket_name = "registry"
 [[d1_databases]]
 binding = "DB"
 database_id = "e1233b26-0da3-4c43-a60d-09d6f7c7ee0c"
+
+[[analytics_engine_datasets]]
+binding = "ANALYTICS"
+dataset = "registry"
